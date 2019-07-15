@@ -1,0 +1,189 @@
+#!/usr/bin/env perl
+
+use Data::Dumper;
+use Net::SMTP;
+use Getopt::Long qw(:config no_auto_abbrev);
+use constant { ORDER_INVALID => 0, ORDER_FIRST => 1, ORDER_LAST => 2, };
+
+
+# are we processing headers?
+my $in_header = 1;
+my $last_hdr_ref;
+my @Header;
+# which one is considered valid out of many headers with the same name?
+my $Header_Order = ORDER_FIRST;
+my $Username = (getpwuid $<)[0];
+my $Mailname = cat("/etc/mailname") || cat("/etc/hostname") || "localhost";
+my $MailFrom = $Username . '@' . $Mailname;
+# use user-provided Sender or From header as MAIL FROM ?
+my $Trust_Fromaddr = 0;
+my $Relay_Addr = "localhost";
+my @recipient_headers = qw/To Cc Bcc/;
+my $get_recipients_from_headers = 0;
+
+
+
+GetOptions(
+	"trust-fromaddr!" => \$Trust_Fromaddr,
+	"f|from=s" => \$MailFrom,
+	"header-order=s" => sub { my $_ = lc $_[1]; if(/^(first|last)$/) { $Header_Order = ($_ eq "first" ? ORDER_FIRST : ORDER_LAST); } else { $Header_Order = ORDER_INVALID; print STDERR "sendmail: Invalid option --$_[0]=$_[1]\n"; }; },
+	"s|relay=s" => \$Relay_Addr,
+	"t" => \$get_recipients_from_headers,
+);
+
+exit 1 if($Header_Order == ORDER_INVALID);
+
+
+
+sub cat($)
+{
+	my $return;
+	if(-r $_[0])
+	{
+		open my $fh, '<', $_[0];
+		$return .= $_ while <$fh>;
+		close $fh;
+	}
+	return $return;
+}
+
+sub extract_emailaddr($)
+{
+	my $_ = shift;
+	my @return;
+	
+	while(
+	 /^\s*,?\s*[^,]*?([\w\.-]+@[\w\.-]+)/m ||
+	 /^\s*,?\s*[""].*?[""]\s*<([\w\.-]+@[\w\.-]+)>/m ||
+	 /^\s*,?\s*[''].*?['']\s*<([\w\.-]+@[\w\.-]+)>/m
+	)
+	{
+		# print STDERR Dumper ["before"=>$`,"match"=>$&,"address"=>$1,"after"=>$'];
+		push @return, $1;
+		$_ = $';
+	}
+	return wantarray ? @return : $return[0];
+}
+
+sub getheader($;$)
+{
+	my $hname = lc shift;
+	my $getall = shift || 0;
+	my @return;
+	
+	for my $hdr_ref (@Header)
+	{
+		if(lc $hdr_ref->{"name"} eq $hname)
+		{
+			push @return, $hdr_ref->{"value"};
+		}
+	}
+	if($getall)
+	{
+		return @return;
+	}
+	else
+	{
+		if($Header_Order == ORDER_FIRST)
+		{
+			return $return[0];
+		}
+		else
+		{
+			return $return[$#return];
+		}
+	}
+}
+
+sub getheaders($)
+{
+	my @return;
+	print Dumper ref $_[0];
+	for my $hname ((ref $_[0] eq 'ARRAY') ? @{$_[0]} : $_[0])
+	{
+		push @return, getheader($hname, 1);
+	}
+	return @return;
+}
+
+
+### BEGIN ###
+
+while(<STDIN>)
+{
+	if($in_header)
+	{
+		if(my($hdr_name, $str) = /^(\S+?):[ ]?/)
+		{
+			my $str = $';
+			my $hdr_name_pretty = $hdr_name;
+			$hdr_name_pretty =~ s/[^-]*/\L\u$&/g;
+			
+			if($hdr_name_pretty eq 'X-Claws-End-Special-Headers')
+			{
+				my @to_preserv = qw/X-Imap-Sender/;
+				@Header = grep {my $h = lc $_->{"name"}; grep {$h eq lc $_} @to_preserv} @Header;
+				next;
+			}
+			
+			my $hdr_hash = { "name" => $hdr_name, "pretty_name" => $hdr_name_pretty, "value" => $str, };
+			push @Header, $hdr_hash;
+			$last_hdr_ref = $hdr_hash;
+		}
+		elsif(/^\s+\S/)
+		{
+			# it is a folded header
+			$last_hdr_ref->{"value"} .= $_;
+		}
+	}
+	
+	if(/^\s*$/)
+	{
+		$in_header = 0;
+		last;
+	}
+}
+
+
+
+if($Trust_Fromaddr)
+{
+	for my $field (qw/Sender From/)
+	{
+		my $str = getheader($field);
+		if(defined $str)
+		{
+			$MailFrom = extract_emailaddr($str);
+			last;
+		}
+	}
+}
+
+
+
+
+$smtp = Net::SMTP->new($Relay_Addr, Timeout => 5);
+$smtp->mail($MailFrom)  or  die "sendmail: [Err] MAIL FROM: $MailFrom\n";
+
+my $recipients_num;
+for my $rcpt_to (extract_emailaddr(join(",", getheaders(\@recipient_headers))))
+{
+	$smtp->to($rcpt_to)  or  die "sendmail: [Err] RCPT TO: $1\n";
+	$recipients_num++;
+}
+
+if($recipients_num > 0)
+{
+	$smtp->data()  or  die "sendmail: [Err] DATA\n";
+	$smtp->datasend(sprintf "%s: %s", $_->{"name"}, $_->{"value"}) for @Header;
+	$smtp->datasend("\r\n");
+	$smtp->datasend($_) while <STDIN>;
+	$smtp->dataend()  or  die "sendmail: [Err] DATA END\n";
+	$smtp->quit()  or  die "sendmail: [Err] QUIT\n";
+	print STDERR "sendmail: [Ok ] Sent.\n";
+}
+else
+{
+	die "sendmail: [Err] No recipients found in Email.\n";
+}
+
