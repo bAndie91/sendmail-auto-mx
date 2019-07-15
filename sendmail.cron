@@ -24,6 +24,8 @@ then
 			userdir=`echo "$cron_user" | sed -e 's@/@⁄@g'`
 			dirpath=$basedir/$userdir/$jobdir/$Ym/$d
 			mkdir -p "$dirpath"
+			chown "$cron_user:" "$basedir/$userdir"
+			chmod 0750 "$basedir/$userdir"
 			( echo -n "$cron_message"; cat; ) >> "$dirpath/$HM"
 		else
 			cron_message=$cron_message$line$'\n'
@@ -36,6 +38,6 @@ then
 			fi
 		fi
 	done
+else
+	errx -1 "Call only from cron."
 fi
-
-errx -1 "Call only from cron."
