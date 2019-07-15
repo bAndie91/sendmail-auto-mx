@@ -22,10 +22,12 @@ then
 			jobdir=`echo "$cron_job" | sed -e 's@/@⁄@g'`
 			jobdir=${jobdir:0:255}
 			userdir=`echo "$cron_user" | sed -e 's@/@⁄@g'`
+			if [ ! -d "$basedir/$userdir" ]
+			then
+				install -o "$cron_user" -m 0750 -d "$basedir/$userdir"
+			fi
 			dirpath=$basedir/$userdir/$jobdir/$Ym/$d
 			mkdir -p "$dirpath"
-			chown "$cron_user:" "$basedir/$userdir"
-			chmod 0750 "$basedir/$userdir"
 			( echo -n "$cron_message"; cat; ) >> "$dirpath/$HM"
 		else
 			cron_message=$cron_message$line$'\n'
