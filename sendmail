@@ -1,38 +1,50 @@
 #!/usr/bin/env perl
 
+use warnings;
 use Data::Dumper;
 use Net::SMTP;
-use Getopt::Long qw(:config no_auto_abbrev);
-use constant { ORDER_INVALID => 0, ORDER_FIRST => 1, ORDER_LAST => 2, };
+use Getopt::Long qw(:config no_auto_abbrev no_ignore_case no_bundling);
 
+sub cat($);
 
+$0 = "sendmail";
 # are we processing headers?
 my $in_header = 1;
 my $last_hdr_ref;
-my @Header;
-# which one is considered valid out of many headers with the same name?
-my $Header_Order = ORDER_FIRST;
-my $Username = (getpwuid $<)[0];
-my $Mailname = cat("/etc/mailname") || cat("/etc/hostname") || "localhost";
-my $MailFrom = $Username . '@' . $Mailname;
+my @Headers;
+my @pwent = (getpwuid $<);
+my $Username = $pwent[0];
+my ($UserGECOS, undef) = split/,/, $pwent[6];
+my $FromRealName;
+my $Maildomain = cat("/etc/mailname") || cat("/etc/hostname") || "localhost";
+my $MailFrom;
 # use user-provided Sender or From header as MAIL FROM ?
 my $Trust_Fromaddr = 0;
 my $Relay_Addr = "localhost";
 my @recipient_headers = qw/To Cc Bcc/;
 my $get_recipients_from_headers = 0;
+my $Auto_Qualify = 1;
 
 
 
 GetOptions(
 	"trust-fromaddr!" => \$Trust_Fromaddr,
+	"relay=s" => \$Relay_Addr,
+	"auto-qualify!" => \$Auto_Qualify,
+	"domain=s" => \$Maildomain,
 	"f|from=s" => \$MailFrom,
-	"header-order=s" => sub { my $_ = lc $_[1]; if(/^(first|last)$/) { $Header_Order = ($_ eq "first" ? ORDER_FIRST : ORDER_LAST); } else { $Header_Order = ORDER_INVALID; print STDERR "sendmail: Invalid option --$_[0]=$_[1]\n"; }; },
-	"s|relay=s" => \$Relay_Addr,
+	"F=s" => \$FromRealName,
 	"t" => \$get_recipients_from_headers,
+	"o=s" => sub{},
+	"bp" => sub{ die "Option not supported: -bp\n"; }
 );
 
-exit 1 if($Header_Order == ORDER_INVALID);
+if(not defined $MailFrom)
+{
+	$MailFrom = $Username . '@' . $Maildomain;
+}
 
+my @recipients = @ARGV;
 
 
 sub cat($)
@@ -53,8 +65,8 @@ sub extract_emailaddr($)
 	my @return;
 	
 	while(
-	 /^\s*,?\s*[^,]*?([\w\.-]+@[\w\.-]+)/m ||
-	 /^\s*,?\s*[""].*?[""]\s*<([\w\.-]+@[\w\.-]+)>/m ||
+	 /^\s*,?\s*[^,]*?([\w\.-]+@[\w\.-]+)/m or
+	 /^\s*,?\s*[""].*?[""]\s*<([\w\.-]+@[\w\.-]+)>/m or
 	 /^\s*,?\s*[''].*?['']\s*<([\w\.-]+@[\w\.-]+)>/m
 	)
 	{
@@ -65,43 +77,17 @@ sub extract_emailaddr($)
 	return wantarray ? @return : $return[0];
 }
 
-sub getheader($;$)
+sub getheaders($)
 {
 	my $hname = lc shift;
-	my $getall = shift || 0;
 	my @return;
 	
-	for my $hdr_ref (@Header)
+	for my $hdr_ref (@Headers)
 	{
 		if(lc $hdr_ref->{"name"} eq $hname)
 		{
 			push @return, $hdr_ref->{"value"};
 		}
-	}
-	if($getall)
-	{
-		return @return;
-	}
-	else
-	{
-		if($Header_Order == ORDER_FIRST)
-		{
-			return $return[0];
-		}
-		else
-		{
-			return $return[$#return];
-		}
-	}
-}
-
-sub getheaders($)
-{
-	my @return;
-	print Dumper ref $_[0];
-	for my $hname ((ref $_[0] eq 'ARRAY') ? @{$_[0]} : $_[0])
-	{
-		push @return, getheader($hname, 1);
 	}
 	return @return;
 }
@@ -109,6 +95,12 @@ sub getheaders($)
 
 ### BEGIN ###
 
+
+# Read up headers
+if(-t 0)
+{
+	warn "Reading headers...\n";
+}
 while(<STDIN>)
 {
 	if($in_header)
@@ -121,13 +113,14 @@ while(<STDIN>)
 			
 			if($hdr_name_pretty eq 'X-Claws-End-Special-Headers')
 			{
+				# Clear all headers so far (except some)
 				my @to_preserv = qw/X-Imap-Sender/;
-				@Header = grep {my $h = lc $_->{"name"}; grep {$h eq lc $_} @to_preserv} @Header;
+				@Headers = grep {my $h = lc $_->{"name"}; grep {$h eq lc $_} @to_preserv} @Headers;
 				next;
 			}
 			
 			my $hdr_hash = { "name" => $hdr_name, "pretty_name" => $hdr_name_pretty, "value" => $str, };
-			push @Header, $hdr_hash;
+			push @Headers, $hdr_hash;
 			$last_hdr_ref = $hdr_hash;
 		}
 		elsif(/^\s+\S/)
@@ -148,42 +141,110 @@ while(<STDIN>)
 
 if($Trust_Fromaddr)
 {
+	SEARCH_FROM_ADDR:
 	for my $field (qw/Sender From/)
 	{
-		my $str = getheader($field);
-		if(defined $str)
+		for my $hval (getheaders($field))
 		{
-			$MailFrom = extract_emailaddr($str);
-			last;
+			$MailFrom = extract_emailaddr($hval);
+			# Count only the first occurrance
+			last SEARCH_FROM_ADDR;
 		}
 	}
 }
 
+if(defined $FromRealName)
+{
+	# From field is passed on CLI, rewrite real name part
+	my $fromrealname = $FromRealName;
+	$fromrealname =~ s/[""]/\\$&/g;
+	
+	my @froms = getheaders("From");
+	if(@froms)
+	{
+		my $addr = extract_emailaddr($froms[0]);
+		my $new_from_header = sprintf "\"%s\" <%s>", $fromrealname, $MailFrom;
+		for my $hdr_ref (@Headers)
+		{
+			if(lc $hdr_ref->{"name"} eq "from")
+			{
+				$hdr_ref->{"value"} = $new_from_header;
+				last;
+			}
+		}
+	}
+	else
+	{
+		my $new_from_header = sprintf "\"%s\" <%s>", $fromrealname, $MailFrom;
+		unshift @Headers, { "name" => "From", "pretty_name" => "From", "value" => $new_from_header, };
+	}
+}
 
-
+sub smtp_die
+{
+	die "$0: [ERR] $_[0]\n$0: <<< ".$smtp->message()."\n";
+}
 
 $smtp = Net::SMTP->new($Relay_Addr, Timeout => 5);
-$smtp->mail($MailFrom)  or  die "sendmail: [Err] MAIL FROM: $MailFrom\n";
+$smtp->mail($MailFrom)  or  smtp_die "MAIL FROM: $MailFrom";
 
-my $recipients_num;
-for my $rcpt_to (extract_emailaddr(join(",", getheaders(\@recipient_headers))))
+my $recipients_num = 0;
+if($get_recipients_from_headers)
 {
-	$smtp->to($rcpt_to)  or  die "sendmail: [Err] RCPT TO: $1\n";
+	my $hdr_recipients = join(",", map {join ",", getheaders($_)} @recipient_headers);
+	if($Auto_Qualify)
+	{
+		my $_ = $hdr_recipients;
+		my $new_hdr_recipients = '';
+		while(
+		 /^(\s*,?\s*<[\w.-]+)(>)/m or
+		 /^(\s*,?\s*[\w.-]+\s*(?![""''<]))()/m or
+		 /^(\s*,?\s*[""].*?[""]\s*<[\w\.-]+)(>)/m or
+		 /^(\s*,?\s*[''].*?['']\s*<[\w\.-]+)(>)/m
+		)
+		{
+			$new_hdr_recipients .= $1 . '@' . $Maildomain . $2;
+			$_ = $';
+		}
+		$hdr_recipients = $new_hdr_recipients . $_;
+	}
+	@recipients = extract_emailaddr($hdr_recipients);
+}
+else
+{
+	if($Auto_Qualify)
+	{
+		@recipients = map{if(/\@/){ $_; }else{ $_.'@'.$Maildomain; }} @recipients;
+	}
+}
+for my $rcpt_to (@recipients)
+{
+	$smtp->to($rcpt_to)  or  smtp_die "RCPT TO: $rcpt_to";
 	$recipients_num++;
 }
 
 if($recipients_num > 0)
 {
-	$smtp->data()  or  die "sendmail: [Err] DATA\n";
-	$smtp->datasend(sprintf "%s: %s", $_->{"name"}, $_->{"value"}) for @Header;
-	$smtp->datasend("\r\n");
-	$smtp->datasend($_) while <STDIN>;
-	$smtp->dataend()  or  die "sendmail: [Err] DATA END\n";
-	$smtp->quit()  or  die "sendmail: [Err] QUIT\n";
-	print STDERR "sendmail: [Ok ] Sent.\n";
+	$smtp->data()  or  smtp_die "DATA";
+	$smtp->datasend(sprintf "%s: %s\r\n", $_->{"name"}, $_->{"value"}) or smtp_die "DATA Header $_->{'name'}"  for @Headers;
+	$smtp->datasend("\r\n") or smtp_die "DATA EOH";
+	if(-t 0)
+	{
+		warn "Reading message body...\n";
+	}
+	my $body_start_pos = tell STDIN;
+	my $pos = $body_start_pos;
+	while(<STDIN>)
+	{
+		$smtp->datasend($_) or smtp_die "DATA Body at byte $pos";
+		$pos = tell(STDIN) - $body_start_pos;
+	}
+	$smtp->dataend()  or  smtp_die "DATA END";
+	$smtp->quit()  or  smtp_die "QUIT";
+	warn "$0: [OK_] Sent.\n";
 }
 else
 {
-	die "sendmail: [Err] No recipients found in Email.\n";
+	die "$0: [ERR] No recipients.\n";
 }
 
