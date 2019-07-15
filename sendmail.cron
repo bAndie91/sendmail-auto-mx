@@ -1,6 +1,14 @@
 #!/bin/bash
 
-. /usr/lib/yazzy-utils/bash-utils || exit -1
+set -e
+
+. /usr/lib/yazzy-utils/bash-utils
+
+basedir=/var/log/cron/user
+now=`date +%s`
+Ym=`date +%Y-%m -d @$now`
+d=`date +%d -d @$now`
+HM=`date +%H%M -d @$now`
 
 if [ ."`readlink -f /proc/$PPID/exe`" = ./usr/sbin/cron ]
 then
@@ -11,12 +19,12 @@ then
 	do
 		if [ -n "$cron_user" -a -n "$cron_job" ]
 		then
-			filebase=`echo "$cron_job" | sed -e 's@/@̸@g'`
-			cron_user_safe=`echo "$cron_user" | sed -e 's@/@̸@g'`
-			mkdir -p "/var/log/cron/user/$cron_user_safe"
-			file=/var/log/cron/user/$cron_user_safe/$filebase
-			file=${file:0:255}
-			( echo -n "$cron_message"; cat; ) > "$file"
+			jobdir=`echo "$cron_job" | sed -e 's@/@⁄@g'`
+			jobdir=${jobdir:0:255}
+			userdir=`echo "$cron_user" | sed -e 's@/@⁄@g'`
+			dirpath=$basedir/$userdir/$jobdir/$Ym/$d
+			mkdir -p "$dirpath"
+			( echo -n "$cron_message"; cat; ) >> "$dirpath/$HM"
 		else
 			cron_message=$cron_message$line$'\n'
 			if [ "${line:0:3}" = To: ]
