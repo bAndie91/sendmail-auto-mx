@@ -1,0 +1,33 @@
+#!/bin/bash
+
+. /usr/lib/yazzy-utils/bash-utils || exit -1
+
+if [ ."`readlink -f /proc/$PPID/exe`" = ./usr/sbin/cron ]
+then
+	cron_user=''
+	cron_job=''
+	cron_message=''
+	while read -r line
+	do
+		if [ -n "$cron_user" -a -n "$cron_job" ]
+		then
+			filebase=`echo "$cron_job" | sed -e 's@/@̸@g'`
+			cron_user_safe=`echo "$cron_user" | sed -e 's@/@̸@g'`
+			mkdir -p "/var/log/cron/user/$cron_user_safe"
+			file=/var/log/cron/user/$cron_user_safe/$filebase
+			file=${file:0:255}
+			( echo -n "$cron_message"; cat; ) > "$file"
+		else
+			cron_message=$cron_message$line$'\n'
+			if [ "${line:0:3}" = To: ]
+			then
+				cron_user=${line:4}
+			elif [ "${line:0:8}" = Subject: ]
+			then
+				cron_job=`echo "$line" | cut -d' ' -f4-`
+			fi
+		fi
+	done
+fi
+
+errx -1 "Call only from cron."
