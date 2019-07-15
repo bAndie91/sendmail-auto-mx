@@ -27,6 +27,9 @@ my $Auto_Qualify = 1;
 
 
 
+# Split contracted option parameters: eg. "-FCronDaemon" to "-F" "CronDaemon"
+@ARGV = map {if(/^-(.)(.+)$/){ $1,$2; }else{ $_; }} @ARGV;
+
 GetOptions(
 	"trust-fromaddr!" => \$Trust_Fromaddr,
 	"relay=s" => \$Relay_Addr,
@@ -35,7 +38,7 @@ GetOptions(
 	"f|from=s" => \$MailFrom,
 	"F=s" => \$FromRealName,
 	"t" => \$get_recipients_from_headers,
-	"o=s" => sub{},
+	"o|oem|oep|oeq=s" => sub{},
 	"bp" => sub{ die "Option not supported: -bp\n"; }
 );
 
