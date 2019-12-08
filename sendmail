@@ -9,8 +9,6 @@ use IO::Socket;
 sub cat($);
 
 $0 = "sendmail";
-# are we processing headers?
-my $in_header = 1;
 my $last_hdr_ref;
 my @Headers;
 my @sensitiveHeaders = qw/X-Getmail-Retrieved-From-Mailbox X-Gmail-Labels/;
@@ -160,39 +158,37 @@ if(-t 0)
 }
 while(<STDIN>)
 {
-	if($in_header)
+	if(/^\r?\n?$/)
 	{
-		if(my($hdr_name, $str) = /^(\S+?):[ ]?/)
-		{
-			my $str = $';
-			my $hdr_name_pretty = $hdr_name;
-			$hdr_name_pretty =~ s/[^-]*/\L\u$&/g;
-			
-			if($hdr_name_pretty ~~ @sensitiveHeadersMarkerHeaders)
-			{
-				# Clear all headers so far (except those which have to be preserved)
-				@Headers = grep {my $h = lc $_->{"name"}; grep {$h eq lc $_} @notSensitiveHeaders} @Headers;
-				next;
-			}
-			
-			unless($hdr_name_pretty ~~ @sensitiveHeaders)
-			{
-				my $hdr_hash = { "name" => $hdr_name, "pretty_name" => $hdr_name_pretty, "value" => $str, };
-				push @Headers, $hdr_hash;
-				$last_hdr_ref = $hdr_hash;
-			}
-		}
-		elsif(/^\s+\S/)
-		{
-			# it is a folded header
-			$last_hdr_ref->{"value"} .= $_;
-		}
+		# End of Headers
+		last;
 	}
 	
-	if(/^\s*$/)
+	s/\r?\n?$//;
+	
+	if(my($hdr_name, $content) = /^(\S+?):[ ]?(.*)/)
 	{
-		$in_header = 0;
-		last;
+		my $hdr_name_pretty = $hdr_name;
+		$hdr_name_pretty =~ s/[^-]*/\L\u$&/g;
+		
+		if($hdr_name_pretty ~~ @sensitiveHeadersMarkerHeaders)
+		{
+			# Clear all headers so far (except those which have to be preserved)
+			@Headers = grep {my $h = lc $_->{"name"}; grep {$h eq lc $_} @notSensitiveHeaders} @Headers;
+			next;
+		}
+		
+		unless($hdr_name_pretty ~~ @sensitiveHeaders)
+		{
+			my $hdr_hash = { "name" => $hdr_name, "pretty_name" => $hdr_name_pretty, "value" => $content, };
+			push @Headers, $hdr_hash;
+			$last_hdr_ref = $hdr_hash;
+		}
+	}
+	elsif(/^\s+(\S.*)/)
+	{
+		# it is a folded header
+		$last_hdr_ref->{"value"} .= $1;
 	}
 }
 
@@ -291,6 +287,11 @@ if ($relay_auto_mx)
 	}
 }
 
+if(not $Relay_Addr)
+{
+	die "No relay address.\n";
+}
+
 $smtp = Net::SMTP->new($Relay_Addr, Timeout => 5);
 $smtp->mail($MailFrom)  or  smtp_die "MAIL FROM: $MailFrom";
 
@@ -303,7 +304,10 @@ for my $rcpt_to (@recipients)
 if($recipients_num > 0)
 {
 	$smtp->data()  or  smtp_die "DATA";
-	$smtp->datasend(sprintf "%s: %s\r\n", $_->{"name"}, $_->{"value"}) or smtp_die "DATA Header $_->{'name'}"  for @Headers;
+	for(@Headers)
+	{
+		$smtp->datasend(sprintf "%s: %s\r\n", $_->{"name"}, $_->{"value"}) or smtp_die "DATA Header $_->{'name'}";
+	}
 	$smtp->datasend("\r\n") or smtp_die "DATA EOH";
 	if(-t 0)
 	{
