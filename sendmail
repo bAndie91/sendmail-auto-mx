@@ -33,13 +33,13 @@ my $UsageText = 'Options:
   --trust-fromaddr
     Accept user-supplied sender address (in Sender or From header) as envelope
     sender, otherwise get it from `-f´ parameter or put system username and 
-    domain name together if `-f´ is missing.
+    domain name together if `-f´ is missing. Default is --no-trust-fromaddr.
   
   --relay SERVER-ADDRESS
   
   --relay-auto-mx
   
-  --auto-qualify
+  --auto-qualify (default), --no-auto-qualify
     Add our own email domain to unqualified recipient names, ie:
     "To: joe" -> "To: joe@example.net"
  
@@ -249,14 +249,16 @@ if($get_recipients_from_headers)
 		my $_ = $hdr_recipients;
 		my $new_hdr_recipients = '';
 		while(
-		 /^(\s*,?\s*<[\w.-]+)(>)/m or
-		 /^(\s*,?\s*[\w.-]+\s*(?![""''<]))()/m or
-		 /^(\s*,?\s*[""].*?[""]\s*<[\w\.-]+)(>)/m or
-		 /^(\s*,?\s*[''].*?['']\s*<[\w\.-]+)(>)/m
+		 /^(\s*,?\s*<[\w\@.-]+)(>)/m or
+		 /^(\s*,?\s*[\w\@.-]+\s*(?![""''<]))()/m or
+		 /^(\s*,?\s*[""].*?[""]\s*<[\w\@\.-]+)(>)/m or
+		 /^(\s*,?\s*[''].*?['']\s*<[\w\@\.-]+)(>)/m
 		)
 		{
-			$new_hdr_recipients .= $1 . '@' . $Maildomain . $2;
-			$_ = $';
+			my ($left, $right, $remain) = ($1, $2, $');
+			if($left !~ /\@/) { $new_hdr_recipients .= $left . '@' . $Maildomain . $right; }
+			else { $new_hdr_recipients .= $left.$right; }
+			$_ = $remain;
 		}
 		$hdr_recipients = $new_hdr_recipients . $_;
 	}
@@ -276,10 +278,13 @@ if ($relay_auto_mx)
 	# NOTE: testing only the 1st recipient's email domain.
 	# Likely won't work with emails having recipients from multiple different email domain.
 	my ($domain_part) = ($recipients[0] =~ /\@(.+)/);
+	warn "Searching MX for $domain_part\n";
 	for my $possible_mx (mx($domain_part))
 	{
 		my $server = $possible_mx->{'exchange'};
-		if(test_tcp_socket($server, (getservbyname 'smtp', 'tcp')[2]))
+		my $port = (getservbyname 'smtp', 'tcp')[2];
+		warn "Testing connection to $server:$port\n";
+		if(test_tcp_socket($server, $port))
 		{
 			$Relay_Addr = $server;
 			last;
