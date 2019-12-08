@@ -66,7 +66,7 @@ fi
 if [ $get_recipients_from_headers = yes ]
 then
 	raw_email=`cat`
-	
+	# TODO
 	recipient+=()
 	echo "$raw_email" | sendEmail -f "$envelope_sender" -t "${recipient[@]}" -o message-format=raw -s AUTO
 else

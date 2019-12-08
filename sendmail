@@ -4,6 +4,7 @@ use warnings;
 use Data::Dumper;
 use Net::SMTP;
 use Getopt::Long qw(:config no_auto_abbrev no_ignore_case no_bundling);
+use IO::Socket;
 
 sub cat($);
 
@@ -12,39 +13,84 @@ $0 = "sendmail";
 my $in_header = 1;
 my $last_hdr_ref;
 my @Headers;
+my @sensitiveHeaders = qw/X-Getmail-Retrieved-From-Mailbox X-Gmail-Labels/;
+my @sensitiveHeadersMarkerHeaders = qw/X-Claws-End-Special-Headers/;
+my @notSensitiveHeaders = qw/X-Imap-Sender/;
 my @pwent = (getpwuid $<);
 my $Username = $pwent[0];
 my ($UserGECOS, undef) = split/,/, $pwent[6];
 my $FromRealName;
-my $Maildomain = cat("/etc/mailname") || cat("/etc/hostname") || "localhost";
+my $Maildomain = cat("/etc/mailname") || `domainname` || cat("/etc/domain") || `dnsdomainname` || "localhost"; $Maildomain =~ s/\n//;
 my $MailFrom;
 # use user-provided Sender or From header as MAIL FROM ?
 my $Trust_Fromaddr = 0;
-my $Relay_Addr = "localhost";
+my $Relay_Addr = undef;
 my @recipient_headers = qw/To Cc Bcc/;
 my $get_recipients_from_headers = 0;
+my $single_dot_does_not_terminate_input = 0;
 my $Auto_Qualify = 1;
+my $relay_auto_mx = 0;
 
+my $UsageText = 'Options:
+  --trust-fromaddr
+    Accept user-supplied sender address (in Sender or From header) as envelope
+    sender, otherwise get it from `-f´ parameter or put system username and 
+    domain name together if `-f´ is missing.
+  
+  --relay SERVER-ADDRESS
+  
+  --relay-auto-mx
+  
+  --auto-qualify
+    Add our own email domain to unqualified recipient names, ie:
+    "To: joe" -> "To: joe@example.net"
+ 
+  --domain DOMAIN
+    Override system email domain which is otherwise got from /etc/maildomain, 
+    or `domainname´ command.
+  
+  -f, --from ADDRESS
+  
+  -F NAME
+  
+  -t, -i, -ti
+';
 
 
 # Split contracted option parameters: eg. "-FCronDaemon" to "-F" "CronDaemon"
-@ARGV = map {if(/^-(.)(.+)$/){ $1,$2; }else{ $_; }} @ARGV;
+@ARGV = map {if(/^-([^-bot])(.+)$/){ $1, $2; }else{ $_; }} @ARGV;
 
 GetOptions(
 	"trust-fromaddr!" => \$Trust_Fromaddr,
 	"relay=s" => \$Relay_Addr,
+	"relay-auto-mx" => \$relay_auto_mx,
 	"auto-qualify!" => \$Auto_Qualify,
 	"domain=s" => \$Maildomain,
 	"f|from=s" => \$MailFrom,
 	"F=s" => \$FromRealName,
 	"t" => \$get_recipients_from_headers,
+	"i|oi" => \$single_dot_does_not_terminate_input,
+	"ti" => sub { $get_recipients_from_headers = 1; $single_dot_does_not_terminate_input = 1; },
 	"o|oem|oep|oeq=s" => sub{},
-	"bp" => sub{ die "Option not supported: -bp\n"; }
-);
+	"bp|bs" => sub{ die "Option not supported: -bp\n"; },
+) or die $UsageText;
 
 if(not defined $MailFrom)
 {
 	$MailFrom = $Username . '@' . $Maildomain;
+}
+
+if(defined $Relay_Addr and $relay_auto_mx)
+{
+	die "Option --relay and --relay-auto-mx are mutually exclusive.\n";
+}
+if(not defined $Relay_Addr and not $relay_auto_mx)
+{
+	$Relay_Addr = "localhost";
+}
+if($get_recipients_from_headers and @ARGV)
+{
+	die "Option -t and recipient in cli arguments are mutually exclusive.\n";
 }
 
 my @recipients = @ARGV;
@@ -95,6 +141,14 @@ sub getheaders($)
 	return @return;
 }
 
+sub test_tcp_socket
+{
+    return 1 if socket(SOCKET, PF_INET, SOCK_STREAM, getprotobyname('tcp')) 
+    	and connect(SOCKET, sockaddr_in($_[1], inet_aton($_[0])));
+    return 0;
+}
+
+
 
 ### BEGIN ###
 
@@ -114,17 +168,19 @@ while(<STDIN>)
 			my $hdr_name_pretty = $hdr_name;
 			$hdr_name_pretty =~ s/[^-]*/\L\u$&/g;
 			
-			if($hdr_name_pretty eq 'X-Claws-End-Special-Headers')
+			if($hdr_name_pretty ~~ @sensitiveHeadersMarkerHeaders)
 			{
-				# Clear all headers so far (except some)
-				my @to_preserv = qw/X-Imap-Sender/;
-				@Headers = grep {my $h = lc $_->{"name"}; grep {$h eq lc $_} @to_preserv} @Headers;
+				# Clear all headers so far (except those which have to be preserved)
+				@Headers = grep {my $h = lc $_->{"name"}; grep {$h eq lc $_} @notSensitiveHeaders} @Headers;
 				next;
 			}
 			
-			my $hdr_hash = { "name" => $hdr_name, "pretty_name" => $hdr_name_pretty, "value" => $str, };
-			push @Headers, $hdr_hash;
-			$last_hdr_ref = $hdr_hash;
+			unless($hdr_name_pretty ~~ @sensitiveHeaders)
+			{
+				my $hdr_hash = { "name" => $hdr_name, "pretty_name" => $hdr_name_pretty, "value" => $str, };
+				push @Headers, $hdr_hash;
+				$last_hdr_ref = $hdr_hash;
+			}
 		}
 		elsif(/^\s+\S/)
 		{
@@ -188,9 +244,6 @@ sub smtp_die
 	die "$0: [ERR] $_[0]\n$0: <<< ".$smtp->message()."\n";
 }
 
-$smtp = Net::SMTP->new($Relay_Addr, Timeout => 5);
-$smtp->mail($MailFrom)  or  smtp_die "MAIL FROM: $MailFrom";
-
 my $recipients_num = 0;
 if($get_recipients_from_headers)
 {
@@ -220,6 +273,27 @@ else
 		@recipients = map{if(/\@/){ $_; }else{ $_.'@'.$Maildomain; }} @recipients;
 	}
 }
+
+if ($relay_auto_mx)
+{
+	eval { use Net::DNS; 1 } or die $@;
+	# NOTE: testing only the 1st recipient's email domain.
+	# Likely won't work with emails having recipients from multiple different email domain.
+	my ($domain_part) = ($recipients[0] =~ /\@(.+)/);
+	for my $possible_mx (mx($domain_part))
+	{
+		my $server = $possible_mx->{'exchange'};
+		if(test_tcp_socket($server, (getservbyname 'smtp', 'tcp')[2]))
+		{
+			$Relay_Addr = $server;
+			last;
+		}
+	}
+}
+
+$smtp = Net::SMTP->new($Relay_Addr, Timeout => 5);
+$smtp->mail($MailFrom)  or  smtp_die "MAIL FROM: $MailFrom";
+
 for my $rcpt_to (@recipients)
 {
 	$smtp->to($rcpt_to)  or  smtp_die "RCPT TO: $rcpt_to";
