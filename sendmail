@@ -43,14 +43,17 @@ my $UsageText = 'Options:
   --auto-qualify (default), --no-auto-qualify
     Add our own email domain to unqualified recipient names, ie:
     "To: joe" -> "To: joe@example.net"
- 
+  
   --domain DOMAIN
     Override system email domain which is otherwise got from /etc/maildomain, 
     or `domainname´ command.
   
   -f, --from ADDRESS
+    Specify envelope sender address (MAIL FROM address)
+    Can be overridden by --trust-fromaddr
   
   -F NAME
+    Add or replace real name in `From´ header
   
   -t, -i, -ti
 ';
@@ -221,12 +224,13 @@ if(defined $FromRealName)
 	if(@froms)
 	{
 		my $addr = extract_emailaddr($froms[0]);
-		my $new_from_header = sprintf "\"%s\" <%s>", $fromrealname, $MailFrom;
+		my $new_from_header = sprintf "\"%s\" <%s>", $fromrealname, $addr;
 		for my $hdr_ref (@Headers)
 		{
 			if(lc $hdr_ref->{"name"} eq "from")
 			{
 				$hdr_ref->{"value"} = $new_from_header;
+				# Touch only the first 'From:' header
 				last;
 			}
 		}
