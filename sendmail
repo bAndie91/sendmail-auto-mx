@@ -304,7 +304,7 @@ if($Relay_Addr =~ s/:(\d+)//)
 	$Relay_Port = $1;
 }
 
-$smtp = Net::SMTP->new($Relay_Addr, Timeout => 5, Port => $Relay_Port);
+$smtp = Net::SMTP->new($Relay_Addr, Timeout => 5, Port => $Relay_Port) or die $@;
 if(defined $SMTP_user) { $smtp->auth($SMTP_user, $SMTP_pass)  or  smtp_die "Authentication"; }
 $smtp->mail($MailFrom)  or  smtp_die "MAIL FROM: $MailFrom";
 
@@ -334,8 +334,11 @@ if($recipients_num > 0)
 		$pos = tell(STDIN) - $body_start_pos;
 	}
 	$smtp->dataend()  or  smtp_die "DATA END";
+	# print the last smtp response line which probably contains the queue id
+	printf "%s", ($smtp->message)[-1];
+	warn join '', map {"$0: <<< $_"} $smtp->message;
 	$smtp->quit()  or  smtp_die "QUIT";
-	warn "$0: [OK_] Sent.\n";
+	warn "$0: [OK] Sent.\n";
 }
 else
 {
