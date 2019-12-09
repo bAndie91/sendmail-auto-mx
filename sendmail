@@ -23,6 +23,7 @@ my $MailFrom;
 # use user-provided Sender or From header as MAIL FROM ?
 my $Trust_Fromaddr = 0;
 my $Relay_Addr = undef;
+my $Relay_Port = undef;
 my @recipient_headers = qw/To Cc Bcc/;
 my $get_recipients_from_headers = 0;
 my $single_dot_does_not_terminate_input = 0;
@@ -35,7 +36,7 @@ my $UsageText = 'Options:
     sender, otherwise get it from `-f´ parameter or put system username and 
     domain name together if `-f´ is missing. Default is --no-trust-fromaddr.
   
-  --relay SERVER-ADDRESS
+  --relay SERVER-ADDRESS[:PORT]
   
   --relay-auto-mx
   
@@ -71,6 +72,8 @@ GetOptions(
 	"ti" => sub { $get_recipients_from_headers = 1; $single_dot_does_not_terminate_input = 1; },
 	"o|oem|oep|oeq=s" => sub{},
 	"bp|bs" => sub{ die "Option not supported: -bp\n"; },
+	"smtp-user-env=s" => sub{ $SMTP_user = $ENV{$_[1]}; },
+	"smtp-pass-env=s" => sub{ $SMTP_pass = $ENV{$_[1]}; },
 ) or die $UsageText;
 
 if(not defined $MailFrom)
@@ -296,8 +299,13 @@ if(not $Relay_Addr)
 {
 	die "No relay address.\n";
 }
+if($Relay_Addr =~ s/:(\d+)//)
+{
+	$Relay_Port = $1;
+}
 
-$smtp = Net::SMTP->new($Relay_Addr, Timeout => 5);
+$smtp = Net::SMTP->new($Relay_Addr, Timeout => 5, Port => $Relay_Port);
+if(defined $SMTP_user) { $smtp->auth($SMTP_user, $SMTP_pass)  or  smtp_die "Authentication"; }
 $smtp->mail($MailFrom)  or  smtp_die "MAIL FROM: $MailFrom";
 
 for my $rcpt_to (@recipients)
