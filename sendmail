@@ -7,6 +7,19 @@ use Getopt::Long qw(:config no_auto_abbrev no_ignore_case no_bundling);
 use IO::Socket;
 
 sub cat($);
+use subs 'die';
+use subs 'warn';
+sub die {
+	my @a = @_;
+	$a[0] = "$0: " . $a[0] if @_;
+	CORE::die(@a);
+}
+sub warn {
+	my @a = @_;
+	$a[0] = "$0: " . $a[0];
+	CORE::warn(@a);
+}
+
 
 $0 = "sendmail";
 my $last_hdr_ref;
@@ -244,7 +257,7 @@ if(defined $FromRealName)
 
 sub smtp_die
 {
-	die "$0: [ERR] $_[0]\n$0: <<< ".$smtp->message()."\n";
+	die "[ERR] $_[0]\n$0: <<< ".$smtp->message()."\n";
 }
 
 my $recipients_num = 0;
@@ -308,8 +321,13 @@ if($Relay_Addr =~ s/:(\d+)//)
 	$Relay_Port = $1;
 }
 
+warn "Connecting to '$Relay_Addr' on port $Relay_Port\n";
 $smtp = Net::SMTP->new($Relay_Addr, Timeout => 5, Port => $Relay_Port) or die $@;
-if(defined $SMTP_user) { $smtp->auth($SMTP_user, $SMTP_pass)  or  smtp_die "Authentication"; }
+if(defined $SMTP_user)
+{
+	warn "Authenticating as '$SMTP_user'\n";
+	$smtp->auth($SMTP_user, $SMTP_pass)  or  smtp_die "Authentication";
+}
 $smtp->mail($MailFrom)  or  smtp_die "MAIL FROM: $MailFrom";
 
 for my $rcpt_to (@recipients)
@@ -340,12 +358,12 @@ if($recipients_num > 0)
 	$smtp->dataend()  or  smtp_die "DATA END";
 	# print the last smtp response line which probably contains the queue id
 	printf "%s", ($smtp->message)[-1];
-	warn join '', map {"$0: <<< $_"} $smtp->message;
+	CORE::warn join '', map {my $_=$_; s/\n*$//; "$0: <<< $_\n"} $smtp->message;
 	$smtp->quit()  or  smtp_die "QUIT";
-	warn "$0: [OK] Sent.\n";
+	warn "[OK] Sent.\n";
 }
 else
 {
-	die "$0: [ERR] No recipients.\n";
+	die "[ERR] No recipients.\n";
 }
 
