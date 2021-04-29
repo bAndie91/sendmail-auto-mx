@@ -131,12 +131,13 @@ sub extract_emailaddr($)
 	my @return;
 	
 	while(
+	 /^\s*,?\s*[^,]*?<([^\s\@""''<>,]+@[^\s\@""''<>,]+)>/m or
 	 /^\s*,?\s*[^,]*?([^\s\@""''<>,]+@[^\s\@""''<>,]+)/m or
 	 /^\s*,?\s*[""].*?[""]\s*<([^\s\@""''<>,]+@[^\s\@""''<>,]+)>/m or
 	 /^\s*,?\s*[''].*?['']\s*<([^\s\@""''<>,]+@[^\s\@""''<>,]+)>/m
 	)
 	{
-		# print STDERR Dumper ["before"=>$`,"match"=>$&,"address"=>$1,"after"=>$'];
+		#print STDERR Dumper {"before"=>$`,"match"=>$&,"address"=>$1,"after"=>$'};
 		push @return, $1;
 		$_ = $';
 	}
@@ -292,6 +293,8 @@ else
 	}
 }
 
+
+
 if ($relay_auto_mx)
 {
 	eval { use Net::DNS; 1 } or die $@;
@@ -332,6 +335,7 @@ $smtp->mail($MailFrom)  or  smtp_die "MAIL FROM: $MailFrom";
 
 for my $rcpt_to (@recipients)
 {
+	warn "Recipient: $rcpt_to\n";
 	$smtp->to($rcpt_to)  or  smtp_die "RCPT TO: $rcpt_to";
 	$recipients_num++;
 }
