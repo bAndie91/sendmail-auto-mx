@@ -5,6 +5,7 @@ use Data::Dumper;
 use Net::SMTP;
 use Getopt::Long qw(:config no_auto_abbrev no_ignore_case no_bundling);
 use IO::Socket;
+use Carp;
 
 sub cat($);
 use subs 'die';
@@ -12,9 +13,9 @@ use subs 'warn';
 sub die {
 	my @a = @_;
 	$a[0] = "$0: " . $a[0] if @_;
-	CORE::die(@a);
+	Carp::confess(@a);
 }
-sub warn {
+sub pinfo {
 	my @a = @_;
 	$a[0] = "$0: " . $a[0];
 	CORE::warn(@a);
@@ -174,7 +175,7 @@ sub test_tcp_socket
 # Read up headers
 if(-t 0)
 {
-	warn "Reading headers...\n";
+	pinfo "Reading headers...\n";
 }
 while(<STDIN>)
 {
@@ -301,12 +302,12 @@ if ($relay_auto_mx)
 	# NOTE: testing only the 1st recipient's email domain.
 	# Likely won't work with emails having recipients from multiple different email domain.
 	my ($domain_part) = ($recipients[0] =~ /\@(.+)/);
-	warn "Searching MX for $domain_part\n";
+	pinfo "Searching MX for $domain_part\n";
 	for my $possible_mx (mx($domain_part))
 	{
 		my $server = $possible_mx->{'exchange'};
 		my $port = (getservbyname 'smtp', 'tcp')[2];
-		warn "Testing connection to $server:$port\n";
+		pinfo "Testing connection to $server:$port\n";
 		if(test_tcp_socket($server, $port))
 		{
 			$Relay_Addr = $server;
@@ -324,18 +325,18 @@ if($Relay_Addr =~ s/:(\d+)//)
 	$Relay_Port = $1;
 }
 
-warn "Connecting to '$Relay_Addr' on port $Relay_Port\n";
+pinfo "Connecting to '$Relay_Addr' on port $Relay_Port\n";
 $smtp = Net::SMTP->new($Relay_Addr, Timeout => 5, Port => $Relay_Port) or die $@;
 if(defined $SMTP_user)
 {
-	warn "Authenticating as '$SMTP_user'\n";
+	pinfo "Authenticating as '$SMTP_user'\n";
 	$smtp->auth($SMTP_user, $SMTP_pass)  or  smtp_die "Authentication";
 }
 $smtp->mail($MailFrom)  or  smtp_die "MAIL FROM: $MailFrom";
 
 for my $rcpt_to (@recipients)
 {
-	warn "Recipient: $rcpt_to\n";
+	pinfo "Recipient: $rcpt_to\n";
 	$smtp->to($rcpt_to)  or  smtp_die "RCPT TO: $rcpt_to";
 	$recipients_num++;
 }
@@ -350,7 +351,7 @@ if($recipients_num > 0)
 	$smtp->datasend("\r\n") or smtp_die "DATA EOH";
 	if(-t 0)
 	{
-		warn "Reading message body...\n";
+		pinfo "Reading message body...\n";
 	}
 	my $body_start_pos = tell STDIN;
 	my $pos = $body_start_pos;
@@ -362,9 +363,9 @@ if($recipients_num > 0)
 	$smtp->dataend()  or  smtp_die "DATA END";
 	# print the last smtp response line which probably contains the queue id
 	printf "%s", ($smtp->message)[-1];
-	CORE::warn join '', map {my $_=$_; s/\n*$//; "$0: <<< $_\n"} $smtp->message;
+	print STDERR join '', map {my $_=$_; s/\n*$//; "$0: <<< $_\n"} $smtp->message;
 	$smtp->quit()  or  smtp_die "QUIT";
-	warn "[OK] Sent.\n";
+	pinfo "[OK] Sent.\n";
 }
 else
 {
