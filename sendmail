@@ -9,16 +9,15 @@ use Carp;
 
 sub cat($);
 use subs 'die';
-use subs 'warn';
 sub die {
-	my @a = @_;
-	$a[0] = "$0: " . $a[0] if @_;
-	Carp::confess(@a);
+	my (@args) = @_;
+	$args[0] =~ s/^/$0: /mg if @args;
+	Carp::confess(@args);
 }
 sub pinfo {
-	my @a = @_;
-	$a[0] = "$0: " . $a[0];
-	CORE::warn(@a);
+	my (@args) = @_;
+	$args[0] =~ s/^/$0: /mg if @args;
+	CORE::warn(@args);
 }
 
 
@@ -43,6 +42,8 @@ my $get_recipients_from_headers = 0;
 my $single_dot_does_not_terminate_input = 0;
 my $Auto_Qualify = 1;
 my $relay_auto_mx = 0;
+my $DebugSMTP = 0;
+my $ProgressCounter = 0;
 
 my $UsageText = 'Options:
   --trust-fromaddr
@@ -70,6 +71,12 @@ my $UsageText = 'Options:
     Add or replace real name in `From´ header
   
   -t, -i, -ti
+  
+  --debug
+    Debug SMTP conversation
+  
+  --progress-counter
+    Show a counter how much data was sent
 ';
 
 
@@ -91,6 +98,8 @@ GetOptions(
 	"bp|bs" => sub{ die "Option not supported: -bp\n"; },
 	"smtp-user-env=s" => sub{ $SMTP_user = $ENV{$_[1]}; },
 	"smtp-pass-env=s" => sub{ $SMTP_pass = $ENV{$_[1]}; },
+	"debug!" => \$DebugSMTP,
+	"progress-counter!" => \$ProgressCounter,
 ) or die $UsageText;
 
 if(not defined $MailFrom)
@@ -259,7 +268,9 @@ if(defined $FromRealName)
 
 sub smtp_die
 {
-	die "[ERR] $_[0]\n$0: <<< ".$smtp->message()."\n";
+	my $smtp_msg = $smtp->message();
+	$smtp_msg =~ s/\n*$//;
+	die "<<< $smtp_msg\n[ERR] $_[0]\n";
 }
 
 my $recipients_num = 0;
@@ -326,7 +337,9 @@ if($Relay_Addr =~ s/:(\d+)//)
 }
 
 pinfo "Connecting to '$Relay_Addr' on port $Relay_Port\n";
-$smtp = Net::SMTP->new($Relay_Addr, Timeout => 5, Port => $Relay_Port) or die $@;
+$smtp = Net::SMTP->new($Relay_Addr, Port => $Relay_Port, Timeout => 120, ExactAddresses => 1, Debug => $DebugSMTP) or die $@;
+
+
 if(defined $SMTP_user)
 {
 	pinfo "Authenticating as '$SMTP_user'\n";
@@ -355,11 +368,30 @@ if($recipients_num > 0)
 	}
 	my $body_start_pos = tell STDIN;
 	my $pos = $body_start_pos;
-	while(<STDIN>)
+	my $data_progress_ts = -1;
+	while(read STDIN, $_, 4 * 4 * 1024)
 	{
-		$smtp->datasend($_) or smtp_die "DATA Body at byte $pos";
+		$smtp->datasend($_) or do{
+			if($ProgressCounter)
+			{
+				print STDERR "\r$pos bytes DATA";
+				print STDERR "\n";
+			}
+			smtp_die "DATA Body at byte $pos";
+		};
+		
 		$pos = tell(STDIN) - $body_start_pos;
+		
+		if($ProgressCounter)
+		{
+			if($data_progress_ts < time - 1)
+			{
+				print STDERR "\r$pos bytes DATA";
+				$data_progress_ts = time;
+			}
+		}
 	}
+	if($ProgressCounter){ print STDERR "\n"; }
 	$smtp->dataend()  or  smtp_die "DATA END";
 	# print the last smtp response line which probably contains the queue id
 	printf "%s", ($smtp->message)[-1];
