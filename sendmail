@@ -11,12 +11,12 @@ sub cat($);
 use subs 'die';
 sub die {
 	my (@args) = @_;
-	$args[0] =~ s/^/$0: /mg if @args;
+	$args[0] =~ s/^/$0: /mg if @args and $args[0];
 	Carp::confess(@args);
 }
 sub pinfo {
 	my (@args) = @_;
-	$args[0] =~ s/^/$0: /mg if @args;
+	$args[0] =~ s/^/$0: /mg if @args and $args[0];
 	CORE::warn(@args);
 }
 
@@ -314,6 +314,7 @@ if ($relay_auto_mx)
 	# Likely won't work with emails having recipients from multiple different email domain.
 	my ($domain_part) = ($recipients[0] =~ /\@(.+)/);
 	pinfo "Searching MX for $domain_part\n";
+	# TODO: support SRV records
 	for my $possible_mx (mx($domain_part))
 	{
 		my $server = $possible_mx->{'exchange'};
