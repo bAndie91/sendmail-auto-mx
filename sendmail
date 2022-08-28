@@ -6,6 +6,7 @@ use Net::SMTP;
 use Getopt::Long qw(:config no_auto_abbrev no_ignore_case no_bundling);
 use IO::Socket;
 use Carp;
+use File::Temp qw(tempfile);
 
 sub cat($);
 use subs 'die';
@@ -44,6 +45,8 @@ my $Auto_Qualify = 1;
 my $relay_auto_mx = 0;
 my $DebugSMTP = 0;
 my $ProgressCounter = 0;
+my $SaveSent;
+my $SaveFailed;
 
 my $UsageText = 'Options:
   --trust-fromaddr
@@ -77,6 +80,10 @@ my $UsageText = 'Options:
   
   --progress-counter
     Show a counter how much data was sent
+  
+  --save-sent DIR
+  --save-failed DIR
+    Save sent/failed email in file in DIR directory
 ';
 
 
@@ -100,6 +107,8 @@ GetOptions(
 	"smtp-pass-env=s" => sub{ $SMTP_pass = $ENV{$_[1]}; },
 	"debug!" => \$DebugSMTP,
 	"progress-counter!" => \$ProgressCounter,
+	"save-sent=s" => \$SaveSent,
+	"save-failed=s" => \$SaveFailed,
 ) or die $UsageText;
 
 if(not defined $MailFrom)
@@ -180,14 +189,24 @@ sub test_tcp_socket
 
 ### BEGIN ###
 
+my $SaveFD;
+my $SaveTempFilename;
+my $mailid = sprintf "%lx-%x", time, $$;
+if($SaveFailed or $SaveSent)
+{
+	($SaveFD, $SaveTempFilename) = tempfile(".sendmail-$mailid-XXXX");
+}
 
 # Read up headers
 if(-t 0)
 {
 	pinfo "Reading headers...\n";
 }
+
 while(<STDIN>)
 {
+	print {$SaveFD} $_ if $SaveFD;
+	
 	if(/^\r?\n?$/)
 	{
 		# End of Headers
@@ -268,6 +287,14 @@ if(defined $FromRealName)
 
 sub smtp_die
 {
+	if($SaveFD)
+	{
+		close $SaveFD;
+		my $SaveFilename = "$SaveFailed/$mailid.eml";
+		pinfo "saving to $SaveFilename";
+		system "mv", $SaveTempFilename, $SaveFilename;
+	}
+	
 	my $smtp_msg = $smtp->message();
 	$smtp_msg =~ s/\n*$//;
 	die "<<< $smtp_msg\n[ERR] $_[0]\n";
@@ -372,6 +399,8 @@ if($recipients_num > 0)
 	my $data_progress_ts = -1;
 	while(read STDIN, $_, 4 * 4 * 1024)
 	{
+		print {$SaveFD} $_ if $SaveFD;
+		
 		$smtp->datasend($_) or do{
 			if($ProgressCounter)
 			{
@@ -394,11 +423,20 @@ if($recipients_num > 0)
 	}
 	if($ProgressCounter){ print STDERR "\n"; }
 	$smtp->dataend()  or  smtp_die "DATA END";
+	
 	# print the last smtp response line which probably contains the queue id
 	printf "%s", ($smtp->message)[-1];
 	print STDERR join '', map {my $_=$_; s/\n*$//; "$0: <<< $_\n"} $smtp->message;
 	$smtp->quit()  or  smtp_die "QUIT";
 	pinfo "[OK] Sent.\n";
+	
+	if($SaveFD)
+	{
+		close $SaveFD;
+		my $SaveFilename = "$SaveSent/$mailid.eml";
+		pinfo "saving to $SaveFilename";
+		system "mv", $SaveTempFilename, $SaveFilename;
+	}
 }
 else
 {
