@@ -194,7 +194,9 @@ my $SaveTempFilename;
 my $mailid = sprintf "%lx-%x", time, $$;
 if($SaveFailed or $SaveSent)
 {
-	($SaveFD, $SaveTempFilename) = tempfile(".sendmail-$mailid-XXXX");
+	my $tmpdir = $SaveSent;
+	$tmpdir = $SaveFailed if not $SaveSent;
+	($SaveFD, $SaveTempFilename) = tempfile(".sendmail-$mailid-XXXX", DIR=>$tmpdir);
 }
 
 # Read up headers

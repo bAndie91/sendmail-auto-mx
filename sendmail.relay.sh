@@ -3,22 +3,7 @@
 # This is a script to mimic sendmail(1) interface, but
 # forward mail to local MTA via sendEmail(1).
 
-. /usr/lib/yazzy-utils/bash-utils || exit -1
-
-maildomain()
-{
-	local c d
-	for c in "cat /etc/mailname" domainname dnsdomainname
-	do
-		d=`command $c`
-		if [ -n "$d" ]
-		then
-			echo "$d"
-			return 0
-		fi
-	done
-	return 1
-}
+. /usr/lib/tool/bash-utils || exit -1
 
 declare -a recipient
 from_header=''
@@ -60,7 +45,8 @@ fi
 
 if [ -z "$envelope_sender" ]
 then
-	envelope_sender=$USER@$(maildomain)
+	maildomain=`cat /etc/domain`
+	envelope_sender=$USER@$maildomain
 fi
 
 if [ $get_recipients_from_headers = yes ]
@@ -68,7 +54,7 @@ then
 	raw_email=`cat`
 	# TODO
 	recipient+=()
-	echo "$raw_email" | sendEmail -f "$envelope_sender" -t "${recipient[@]}" -o message-format=raw -s AUTO
+	echo "$raw_email" | sendEmail -f "$envelope_sender" -t "${recipient[@]}" -o message-format=raw -o message-file=/dev/stdin -s "${SMTP_SERVER:-localhost:25}"
 else
 	sendEmail -f "$envelope_sender" -t "${recipient[@]}" -o message-format=raw -s AUTO
 fi
