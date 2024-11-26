@@ -7,6 +7,7 @@ use Getopt::Long qw(:config no_auto_abbrev no_ignore_case no_bundling);
 use IO::Socket;
 use Carp;
 use File::Temp qw(tempfile);
+no if ($] >= 5.018), 'warnings' => 'experimental::smartmatch';
 
 sub cat($);
 use subs 'die';
@@ -146,7 +147,7 @@ sub cat($)
 
 sub extract_emailaddr($)
 {
-	my $_ = shift;
+	local $_ = shift;
 	my @return;
 	
 	while(
@@ -293,13 +294,14 @@ sub smtp_die
 	{
 		close $SaveFD;
 		my $SaveFilename = "$SaveFailed/$mailid.eml";
-		pinfo "saving to $SaveFilename";
+		pinfo "saving to $SaveFilename\n";
 		system "mv", $SaveTempFilename, $SaveFilename;
 	}
 	
 	my $smtp_msg = $smtp->message();
 	$smtp_msg =~ s/\n*$//;
-	die "<<< $smtp_msg\n[ERR] $_[0]\n";
+	$smtp_msg =~ s/^/<<< /gm;
+	die "$smtp_msg\n[ERR] $_[0]\n";
 }
 
 my $recipients_num = 0;
@@ -308,7 +310,7 @@ if($get_recipients_from_headers)
 	my $hdr_recipients = join(",", map {join ",", getheaders($_)} @recipient_headers);
 	if($Auto_Qualify)
 	{
-		my $_ = $hdr_recipients;
+		local $_ = $hdr_recipients;
 		my $new_hdr_recipients = '';
 		while(
 		 /^(\s*,?\s*<[^>]+)(>)/m or
@@ -346,7 +348,7 @@ if ($relay_auto_mx)
 	# TODO: support SRV records
 	for my $possible_mx (mx($domain_part))
 	{
-		my $server = $possible_mx->{'exchange'};
+		my $server = $possible_mx->exchange;
 		my $port = (getservbyname 'smtp', 'tcp')[2];
 		pinfo "Testing connection to $server:$port\n";
 		if(test_tcp_socket($server, $port))
@@ -428,7 +430,7 @@ if($recipients_num > 0)
 	
 	# print the last smtp response line which probably contains the queue id
 	printf "%s", ($smtp->message)[-1];
-	print STDERR join '', map {my $_=$_; s/\n*$//; "$0: <<< $_\n"} $smtp->message;
+	print STDERR join '', map {local $m = $_; $m =~ s/\n*$//; "$0: <<< $m\n"} $smtp->message;
 	$smtp->quit()  or  smtp_die "QUIT";
 	pinfo "[OK] Sent.\n";
 	
@@ -436,7 +438,7 @@ if($recipients_num > 0)
 	{
 		close $SaveFD;
 		my $SaveFilename = "$SaveSent/$mailid.eml";
-		pinfo "saving to $SaveFilename";
+		pinfo "saving to $SaveFilename\n";
 		system "mv", $SaveTempFilename, $SaveFilename;
 	}
 }
