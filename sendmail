@@ -58,6 +58,9 @@ my $UsageText = 'Options:
   --relay SERVER-ADDRESS[:PORT]
   
   --relay-auto-mx
+    Find the first recipient\'s Mail eXchanger (DNS MX record)
+    and relay the email via it.
+    Note: SRV record lookup [RFC-6186] is not yet supported (TODO).
   
   --auto-qualify (default), --no-auto-qualify
     Add our own email domain to unqualified recipient names, ie:
@@ -75,16 +78,20 @@ my $UsageText = 'Options:
     Add or replace real name in `From´ header
   
   -t, -i, -ti
+    BSD sendmail-compatible options.
+    -t   Get the recipients from the input email To, Cc, Bcc headers.
+    -i   Do not cease reading input email when encountering a single dot
+         alone in a line.
   
   --debug
     Debug SMTP conversation
   
   --progress-counter
-    Show a counter how much data was sent
+    Show a counter per second how much data was sent.
   
   --save-sent DIR
   --save-failed DIR
-    Save sent/failed email in file in DIR directory
+    Save sent/failed email in file in DIR directory.
 ';
 
 
@@ -396,7 +403,7 @@ if($recipients_num > 0)
 	$smtp->datasend("\r\n") or smtp_die "DATA EOH";
 	if(-t 0)
 	{
-		pinfo "Reading message body...\n";
+		pinfo "Reading message body from STDIN...\n";
 	}
 	my $body_start_pos = tell STDIN;
 	my $pos = $body_start_pos;

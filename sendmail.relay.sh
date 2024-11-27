@@ -45,16 +45,16 @@ fi
 
 if [ -z "$envelope_sender" ]
 then
-	maildomain=`cat /etc/domain`
+	maildomain=`cat /etc/maildomain 2>/dev/null || domainname`
+	if [ "$maildomain" = '(none)' ]; then maildomain=''; fi
+	if [ -n "$maildomain" ]; then maildomain=localhost; fi
 	envelope_sender=$USER@$maildomain
 fi
 
 if [ $get_recipients_from_headers = yes ]
 then
 	raw_email=`cat`
-	# TODO
-	recipient+=()
-	echo "$raw_email" | sendEmail -f "$envelope_sender" -t "${recipient[@]}" -o message-format=raw -o message-file=/dev/stdin -s "${SMTP_SERVER:-localhost:25}"
-else
-	sendEmail -f "$envelope_sender" -t "${recipient[@]}" -o message-format=raw -s AUTO
+	recipient+=(`mail-extract-raw-headers -n To Cc Bcc <<< "$raw_email" | mime-header-decode | mail-extract-addresses | sort -u`)
 fi
+
+sendEmail -f "$envelope_sender" -t "${recipient[@]}" -o message-format=raw -o message-file=/dev/stdin -s "${SMTP_SERVER:-AUTO}" <<< "$raw_email"
