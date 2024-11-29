@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # This is a script to mimic sendmail(1) interface, but
-# forward mail to local MTA via sendEmail(1).
+# relay email by sendEmail(1).
 
 . /usr/lib/tool/bash-utils || exit -1
 
@@ -15,7 +15,7 @@ while [ -n "$1" ]
 do
 	case "$1" in
 	-F)	shift
-		from_header=$1;;
+		from_header=$1;;  # TODO FIXME
 	-f|-r)
 		shift
 		envelope_sender=$1;;
@@ -43,18 +43,44 @@ then
 fi
 
 
+maildomain=`cat /etc/maildomain 2>/dev/null || domainname`
+if [ "$maildomain" = '(none)' ]; then maildomain=''; fi
+if [ -n "$maildomain" ]; then maildomain=localhost; fi
+
+qualify_address()
+{
+	# add local domain name if there is no domain part in the address
+	local addr=$1
+	if ! [[ $addr =~ @ ]]
+	then
+		addr=$addr@$maildomain
+	fi
+	echo "$addr"
+}
+
 if [ -z "$envelope_sender" ]
 then
-	maildomain=`cat /etc/maildomain 2>/dev/null || domainname`
-	if [ "$maildomain" = '(none)' ]; then maildomain=''; fi
-	if [ -n "$maildomain" ]; then maildomain=localhost; fi
 	envelope_sender=$USER@$maildomain
+else
+	envelope_sender=`qualify_address "$envelope_sender"`
 fi
+
+for idx in ${!recipient[@]}
+do
+	recipient[$idx]=`qualify_address "${recipient[$idx]}"`
+done
+
+raw_email=`cat`
 
 if [ $get_recipients_from_headers = yes ]
 then
-	raw_email=`cat`
 	recipient+=(`mail-extract-raw-headers -n To Cc Bcc <<< "$raw_email" | mime-header-decode | mail-extract-addresses | sort -u`)
 fi
 
-sendEmail -f "$envelope_sender" -t "${recipient[@]}" -o message-format=raw -o message-file=/dev/stdin -s "${SMTP_SERVER:-AUTO}" <<< "$raw_email"
+recipient_args=()
+for recipient in "${recipients[@]}"
+do
+	recipient_args+=(-t "$recipient")
+done
+
+sendEmail -f "$envelope_sender" "${recipient_args[@]}" -o message-format=raw -o message-file=- -s "${SMTP_SERVER:-localhost:25}" <<< "$raw_email" 1>&2
