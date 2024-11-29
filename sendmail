@@ -204,7 +204,7 @@ if($SaveFailed or $SaveSent)
 {
 	my $tmpdir = $SaveSent;
 	$tmpdir = $SaveFailed if not $SaveSent;
-	($SaveFD, $SaveTempFilename) = tempfile(".sendmail-$mailid-XXXX", DIR=>$tmpdir);
+	($SaveFD, $SaveTempFilename) = tempfile(".sendmail-$mailid-XXXX.eml", DIR=>$tmpdir);
 }
 
 # Read up headers
