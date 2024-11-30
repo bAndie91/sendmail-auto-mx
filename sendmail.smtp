@@ -5,46 +5,51 @@
 
 . /usr/lib/tool/bash-utils || exit -1
 
-declare -a recipients
-from_header=''
 envelope_sender=''
+trust_fromaddr=no
+declare -a recipients
 get_recipients_from_headers=no
 single_dot_terminates_input=yes
 
 while [ -n "$1" ]
 do
 	case "$1" in
-	-F)	shift
-		from_header=$1;;  # TODO FIXME
-	-f|-r)
+	(--trust-fromaddr)
+		trust_fromaddr=yes;;
+	(-f|-r)
 		shift
 		envelope_sender=$1;;
-	-t)	get_recipients_from_headers=yes;;
-	-ti)
+	(-t)	get_recipients_from_headers=yes;;
+	(-ti)
 		get_recipients_from_headers=yes
 		single_dot_terminates_input=no
 		;;
-	-i|-oi)
+	(-i|-oi)
 		single_dot_terminates_input=no;;
-	-o)
-		shift
-		warnx "Ignoring option: -o $1";;
-	-bp|-bs)
+	(-o|-F)
+		warnx "Ignoring option: $1 $2"
+		shift;;
+	(-bp|-bs)
 		errx 22 "Option not supported: $1";;
-	--help)
+	(--help)
 		echo "Raw email is read on stdin"
 		echo "Options:"
-		echo "  -F FROM_HEADER"
-		echo "  -f, -r MAIL_FROM"
-		echo "  -t           take recipients from input email To, Cc, and Bcc fields"
-		echo "  -i, -oi      lone dot does not terminate the input email"
-		echo "  -ti          usual usage, equal to -t -i"
+		echo "  -f, -r MAIL_FROM   set envelope sender"
+		echo "  --trust-fromaddr   take MAIL_FROM from input email From header"
+		echo "  -t                 take recipients from input email To, Cc, and Bcc headers"
+		echo "  -i, -oi            lone dot does not terminate the input email"
+		echo "  -ti                usual usage, equal to -t -i"
 		exit 0;;
-	-*)	errx 22 "Unknown option: $1";;
-	*)	recipients+=("$1");;
+	(-*)	errx 22 "Unknown option: $1";;
+	(*)	recipients+=("$1");;
 	esac
 	shift
 done
+
+if [ $trust_fromaddr = yes -a -n "$envelope_sender" ]
+then
+	errx 22 "Option -f/-r and --trust-fromaddr are mutually exclusive."
+fi
 
 if [ $get_recipients_from_headers = yes -a ${#recipients[@]} != 0 ]
 then
@@ -67,11 +72,9 @@ qualify_address()
 	echo "$addr"
 }
 
-if [ -z "$envelope_sender" ]
+if [ -z "$envelope_sender" -a $trust_fromaddr = no ]
 then
 	envelope_sender=$USER@$maildomain
-else
-	envelope_sender=`qualify_address "$envelope_sender"`
 fi
 
 for idx in ${!recipients[@]}
@@ -81,15 +84,25 @@ done
 
 headers_buffer=''
 
-if [ $get_recipients_from_headers = yes ]
+if [ $get_recipients_from_headers = yes -o $trust_fromaddr = yes ]
 then
 	while read -r header_line
 	do
 		headers_buffer=$headers_buffer$header_line$'\n'
 		if [ "$header_line" = $'\r' -o -z "$header_line" ]; then break; fi  # end-of-headers
 	done
-	recipients+=(`mail-extract-raw-headers -n To Cc Bcc <<< "$headers_buffer" | mime-header-decode | mail-extract-addresses | sort -u`)
+	if [ $get_recipients_from_headers = yes ]
+	then
+		recipients+=(`mail-extract-raw-headers -n To Cc Bcc <<< "$headers_buffer" | mime-header-decode | mail-extract-addresses | sort -u`)
+	fi
+	if [ $trust_fromaddr = yes ]
+	then
+		envelope_sender=`mail-extract-raw-headers -n From <<< "$headers_buffer" | mime-header-decode | mail-extract-addresses`
+	fi
 fi
+
+
+envelope_sender=`qualify_address "$envelope_sender"`
 
 recipient_args=()
 for recipient in "${recipients[@]}"
@@ -101,4 +114,4 @@ done
 	echo -n "$headers_buffer"
 	cat  # pipe the rest/all of the email
 } |\
-sendEmail -f "$envelope_sender" "${recipient_args[@]}" -o message-format=raw -o message-file=/dev/stdin -o tls=auto -s "${SMTP_SERVER:-localhost:25}" 1>&2
+sendEmail -v -f "$envelope_sender" "${recipient_args[@]}" -o message-format=raw -o message-file=/dev/stdin -o tls=auto $SENDEMAIL_OPTS -s "${SMTP_SERVER:-localhost:25}" 1>&2
