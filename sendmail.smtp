@@ -19,7 +19,8 @@ do
 	(-f|-r)
 		shift
 		envelope_sender=$1;;
-	(-t)	get_recipients_from_headers=yes;;
+	(-t)
+		get_recipients_from_headers=yes;;
 	(-ti)
 		get_recipients_from_headers=yes
 		single_dot_terminates_input=no
@@ -40,8 +41,10 @@ do
 		echo "  -i, -oi            lone dot does not terminate the input email"
 		echo "  -ti                usual usage, equal to -t -i"
 		exit 0;;
-	(-*)	errx 22 "Unknown option: $1";;
-	(*)	recipients+=("$1");;
+	(-*)
+		errx 22 "Unknown option: $1";;
+	(*)
+		recipients+=("$1");;
 	esac
 	shift
 done
