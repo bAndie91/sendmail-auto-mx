@@ -5,7 +5,7 @@
 
 . /usr/lib/tool/bash-utils || exit -1
 
-declare -a recipient
+declare -a recipients
 from_header=''
 envelope_sender=''
 get_recipients_from_headers=no
@@ -31,13 +31,22 @@ do
 		warnx "Ignoring option: -o $1";;
 	-bp|-bs)
 		errx 22 "Option not supported: $1";;
+	--help)
+		echo "Raw email is read on stdin"
+		echo "Options:"
+		echo "  -F FROM_HEADER"
+		echo "  -f, -r MAIL_FROM"
+		echo "  -t           take recipients from input email To, Cc, and Bcc fields"
+		echo "  -i, -oi      lone dot does not terminate the input email"
+		echo "  -ti          usual usage, equal to -t -i"
+		exit 0;;
 	-*)	errx 22 "Unknown option: $1";;
-	*)	recipient+=("$1");;
+	*)	recipients+=("$1");;
 	esac
 	shift
 done
 
-if [ $get_recipients_from_headers = yes -a ${#recipient[@]} != 0 ]
+if [ $get_recipients_from_headers = yes -a ${#recipients[@]} != 0 ]
 then
 	errx 22 "Option -t and specifying recipients are mutually exclusive."
 fi
@@ -45,7 +54,7 @@ fi
 
 maildomain=`cat /etc/maildomain 2>/dev/null || domainname`
 if [ "$maildomain" = '(none)' ]; then maildomain=''; fi
-if [ -n "$maildomain" ]; then maildomain=localhost; fi
+if [ -z "$maildomain" ]; then maildomain=localhost; fi
 
 qualify_address()
 {
@@ -65,16 +74,21 @@ else
 	envelope_sender=`qualify_address "$envelope_sender"`
 fi
 
-for idx in ${!recipient[@]}
+for idx in ${!recipients[@]}
 do
-	recipient[$idx]=`qualify_address "${recipient[$idx]}"`
+	recipients[$idx]=`qualify_address "${recipients[$idx]}"`
 done
 
-raw_email=`cat`
+headers_buffer=''
 
 if [ $get_recipients_from_headers = yes ]
 then
-	recipient+=(`mail-extract-raw-headers -n To Cc Bcc <<< "$raw_email" | mime-header-decode | mail-extract-addresses | sort -u`)
+	while read -r header_line
+	do
+		headers_buffer=$headers_buffer$header_line$'\n'
+		if [ "$header_line" = $'\r' -o -z "$header_line" ]; then break; fi  # end-of-headers
+	done
+	recipients+=(`mail-extract-raw-headers -n To Cc Bcc <<< "$headers_buffer" | mime-header-decode | mail-extract-addresses | sort -u`)
 fi
 
 recipient_args=()
@@ -83,4 +97,8 @@ do
 	recipient_args+=(-t "$recipient")
 done
 
-sendEmail -f "$envelope_sender" "${recipient_args[@]}" -o message-format=raw -o message-file=- -s "${SMTP_SERVER:-localhost:25}" <<< "$raw_email" 1>&2
+{
+	echo -n "$headers_buffer"
+	cat  # pipe the rest/all of the email
+} |\
+sendEmail -f "$envelope_sender" "${recipient_args[@]}" -o message-format=raw -o message-file=/dev/stdin -o tls=auto -s "${SMTP_SERVER:-localhost:25}" 1>&2
