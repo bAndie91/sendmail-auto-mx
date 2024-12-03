@@ -384,6 +384,7 @@ if(defined $SMTP_user)
 	pinfo "Authenticating as '$SMTP_user'\n";
 	$smtp->auth($SMTP_user, $SMTP_pass)  or  smtp_die "Authentication";
 }
+pinfo "Mail From: $MailFrom\n";
 $smtp->mail($MailFrom)  or  smtp_die "MAIL FROM: $MailFrom";
 
 for my $rcpt_to (@recipients)
