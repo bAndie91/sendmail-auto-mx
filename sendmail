@@ -4,6 +4,7 @@ use warnings;
 use Data::Dumper;
 use Net::SMTP;
 use Getopt::Long qw(:config no_auto_abbrev no_ignore_case no_bundling);
+use Socket qw/inet_ntoa/;
 use IO::Socket;
 use Carp;
 use File::Temp qw(tempfile);
@@ -38,7 +39,7 @@ my $MailFrom;
 # use user-provided Sender or From header as MAIL FROM ?
 my $Trust_Fromaddr = 0;
 my $Relay_Addr = undef;
-my $Relay_Port = undef;
+my $Relay_Port = '';
 my @recipient_headers = qw/To Cc Bcc/;
 my $get_recipients_from_headers = 0;
 my $single_dot_does_not_terminate_input = 0;
@@ -46,8 +47,9 @@ my $Auto_Qualify = 1;
 my $relay_auto_mx = 0;
 my $DebugSMTP = 0;
 my $ProgressCounter = 0;
-my $SaveSent;
-my $SaveFailed;
+my $SaveSentDir;
+my $SaveFailedDir;
+my $SaveSmtpResponse;
 
 my $UsageText = 'Options:
   --trust-fromaddr
@@ -92,6 +94,14 @@ my $UsageText = 'Options:
   --save-sent DIR
   --save-failed DIR
     Save sent/failed email in file in DIR directory.
+    Resulting filename ends with ".eml"
+  
+  --save-log
+    Save some traceability info in the --save-sent DIR directory.
+    Resulting filename ends with ".log"
+    Log includes: SMTP server name, IP, what the server answered on
+    Email submission (after END-OF-DATA)
+    
 ';
 
 
@@ -115,8 +125,9 @@ GetOptions(
 	"smtp-pass-env=s" => sub{ $SMTP_pass = $ENV{$_[1]}; },
 	"debug!" => \$DebugSMTP,
 	"progress-counter!" => \$ProgressCounter,
-	"save-sent=s" => \$SaveSent,
-	"save-failed=s" => \$SaveFailed,
+	"save-sent=s" => \$SaveSentDir,
+	"save-failed=s" => \$SaveFailedDir,
+	"save-log!" => \$SaveSmtpResponse,
 ) or die $UsageText;
 
 if(not defined $MailFrom)
@@ -200,10 +211,10 @@ sub test_tcp_socket
 my $SaveFD;
 my $SaveTempFilename;
 my $mailid = sprintf "%lx-%x", time, $$;
-if($SaveFailed or $SaveSent)
+if($SaveFailedDir or $SaveSentDir)
 {
-	my $tmpdir = $SaveSent;
-	$tmpdir = $SaveFailed if not $SaveSent;
+	my $tmpdir = $SaveSentDir;
+	$tmpdir = $SaveFailedDir if not $SaveSentDir;
 	($SaveFD, $SaveTempFilename) = tempfile(".sendmail-$mailid-XXXX", DIR=>$tmpdir, SUFFIX=>'.eml');
 }
 
@@ -300,7 +311,7 @@ sub smtp_die
 	if($SaveFD)
 	{
 		close $SaveFD;
-		my $SaveFilename = "$SaveFailed/$mailid.eml";
+		my $SaveFilename = "$SaveFailedDir/$mailid.eml";
 		pinfo "saving to $SaveFilename\n";
 		system "mv", $SaveTempFilename, $SaveFilename;
 	}
@@ -310,6 +321,19 @@ sub smtp_die
 	$smtp_msg =~ s/^/<<< /gm;
 	die "$smtp_msg\n[ERR] $_[0]\n";
 }
+
+sub log_to_logfile
+{
+	if($SaveSentDir and $SaveSmtpResponse)
+	{
+		my $SaveFilename = "$SaveSentDir/$mailid.log";
+		open my $fh, '>>', $SaveFilename;
+		for my $line (@_) { print {$fh} "$line\n"; }
+		close $fh;
+	}
+}	
+
+
 
 my $recipients_num = 0;
 if($get_recipients_from_headers)
@@ -375,8 +399,15 @@ if($Relay_Addr =~ s/:(\d+)//)
 	$Relay_Port = $1;
 }
 
-pinfo "Connecting to '$Relay_Addr' on port $Relay_Port\n";
+pinfo "Connecting to '$Relay_Addr' on port ".($Relay_Port || '(default)')."\n";
 $smtp = Net::SMTP->new($Relay_Addr, Port => $Relay_Port, Timeout => 120, ExactAddresses => 1, Debug => $DebugSMTP) or die $@;
+log_to_logfile(
+	"connect address: $Relay_Addr",
+	"connect ip: ".$smtp->peerhost,
+	"connect port: ".$smtp->peerport,
+	"banner: ".$smtp->banner,
+	"server domain: ".$smtp->domain
+);
 
 
 if(defined $SMTP_user)
@@ -435,6 +466,7 @@ if($recipients_num > 0)
 	}
 	if($ProgressCounter){ print STDERR "\n"; }
 	$smtp->dataend()  or  smtp_die "DATA END";
+	log_to_logfile($smtp->message);
 	
 	# print the last smtp response line which probably contains the queue id
 	printf "%s", ($smtp->message)[-1];
@@ -445,7 +477,7 @@ if($recipients_num > 0)
 	if($SaveFD)
 	{
 		close $SaveFD;
-		my $SaveFilename = "$SaveSent/$mailid.eml";
+		my $SaveFilename = "$SaveSentDir/$mailid.eml";
 		pinfo "saving to $SaveFilename\n";
 		system "mv", $SaveTempFilename, $SaveFilename;
 	}
