@@ -27,9 +27,8 @@ sub pinfo {
 $0 = "sendmail";
 my $last_hdr_ref;
 my @Headers;
-my @sensitiveHeaders = qw/X-Getmail-Retrieved-From-Mailbox X-Gmail-Labels/;
+my $HeadersBuffer = '';
 my @sensitiveHeadersMarkerHeaders = qw/X-Claws-End-Special-Headers/;
-my @notSensitiveHeaders = qw/X-Imap-Sender/;
 my @pwent = (getpwuid $<);
 my $Username = $pwent[0];
 my ($UserGECOS, undef) = split/,/, $pwent[6];
@@ -227,14 +226,15 @@ if(-t 0)
 while(<STDIN>)
 {
 	print {$SaveFD} $_ if $SaveFD;
+	$HeadersBuffer .= $_;
 	
-	if(/^\r?\n?$/)
+	if(/^\r?\n$/)
 	{
 		# End of Headers
 		last;
 	}
 	
-	s/\r?\n?$//;
+	s/\r*\n?$//;
 	
 	if(my($hdr_name, $content) = /^(\S+?):[ ]?(.*)/)
 	{
@@ -243,21 +243,19 @@ while(<STDIN>)
 		
 		if($hdr_name_pretty ~~ @sensitiveHeadersMarkerHeaders)
 		{
-			# Clear all headers so far (except those which have to be preserved)
-			@Headers = grep {my $h = lc $_->{"name"}; grep {$h eq lc $_} @notSensitiveHeaders} @Headers;
+			# Clear all headers so far (except those which need to be preserved)
+			@Headers = ();
+			$HeadersBuffer = '';
 			next;
 		}
 		
-		unless($hdr_name_pretty ~~ @sensitiveHeaders)
-		{
-			my $hdr_hash = { "name" => $hdr_name, "pretty_name" => $hdr_name_pretty, "value" => $content, };
-			push @Headers, $hdr_hash;
-			$last_hdr_ref = $hdr_hash;
-		}
+		my $hdr_hash = { "name" => $hdr_name, "pretty_name" => $hdr_name_pretty, "value" => $content, };
+		push @Headers, $hdr_hash;
+		$last_hdr_ref = $hdr_hash;
 	}
 	elsif(/^\s+(\S.*)/)
 	{
-		# it is a folded header
+		# it is a folded header continuation
 		$last_hdr_ref->{"value"} .= $1;
 	}
 }
@@ -294,7 +292,7 @@ if(defined $FromRealName)
 			if(lc $hdr_ref->{"name"} eq "from")
 			{
 				$hdr_ref->{"value"} = $new_from_header;
-				# Touch only the first 'From:' header
+				# Touch only the first 'From:' header if there would be more
 				last;
 			}
 		}
@@ -428,11 +426,7 @@ for my $rcpt_to (@recipients)
 if($recipients_num > 0)
 {
 	$smtp->data()  or  smtp_die "DATA";
-	for(@Headers)
-	{
-		$smtp->datasend(sprintf "%s: %s\r\n", $_->{"name"}, $_->{"value"}) or smtp_die "DATA Header $_->{'name'}";
-	}
-	$smtp->datasend("\r\n") or smtp_die "DATA EOH";
+	$smtp->datasend($HeadersBuffer) or smtp_die "DATA Headers";
 	if(-t 0)
 	{
 		pinfo "Reading message body from STDIN...\n";
