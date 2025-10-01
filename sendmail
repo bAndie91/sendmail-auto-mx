@@ -49,6 +49,7 @@ my $ProgressCounter = 0;
 my $SaveSentDir;
 my $SaveFailedDir;
 my $SaveSmtpResponse;
+my $OptForceSTARTTLS = 0;
 
 my $UsageText = 'Options:
   --trust-fromaddr
@@ -62,6 +63,11 @@ my $UsageText = 'Options:
     Find the first recipient\'s Mail eXchanger (DNS MX record)
     and relay the email via it.
     Note: SRV record lookup [RFC-6186] is not yet supported (TODO).
+  
+  --force-starttls
+  --smtp-user USER
+  --smtp-user-env ENV
+  --smtp-pass-env ENV
   
   --auto-qualify (default), --no-auto-qualify
     Add our own email domain to unqualified recipient names, ie:
@@ -120,6 +126,7 @@ GetOptions(
 	"ti" => sub { $get_recipients_from_headers = 1; $single_dot_does_not_terminate_input = 1; },
 	"o|oem|oep|oeq=s" => sub{},
 	"bp|bs" => sub{ die "Option not supported: -bp\n"; },
+	"smtp-user=s" => \$SMTP_user,
 	"smtp-user-env=s" => sub{ $SMTP_user = $ENV{$_[1]}; },
 	"smtp-pass-env=s" => sub{ $SMTP_pass = $ENV{$_[1]}; },
 	"debug!" => \$DebugSMTP,
@@ -127,6 +134,7 @@ GetOptions(
 	"save-sent=s" => \$SaveSentDir,
 	"save-failed=s" => \$SaveFailedDir,
 	"save-log!" => \$SaveSmtpResponse,
+	"force-starttls!" => \$OptSTARTTLS,
 ) or die $UsageText;
 
 if(not defined $MailFrom)
@@ -406,6 +414,11 @@ log_to_logfile(
 	"banner: ".$smtp->banner,
 	"server domain: ".$smtp->domain
 );
+
+if($OptForceSTARTTLS)
+{
+	$smtp->starttls()  or  smtp_die "STARTTLS";
+}
 
 
 if(defined $SMTP_user)
