@@ -134,7 +134,7 @@ GetOptions(
 	"save-sent=s" => \$SaveSentDir,
 	"save-failed=s" => \$SaveFailedDir,
 	"save-log!" => \$SaveSmtpResponse,
-	"force-starttls!" => \$OptSTARTTLS,
+	"force-starttls!" => \$OptForceSTARTTLS,
 ) or die $UsageText;
 
 if(not defined $MailFrom)
